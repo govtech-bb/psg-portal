@@ -89,7 +89,10 @@
           <span id="preview-title"></span>
           <button class="btn btn--secondary btn--small" onclick="togglePreview()">Close preview</button>
         </div>
-        <iframe id="preview-frame" title="Form preview" sandbox="allow-scripts allow-same-origin"></iframe>
+        <!-- Preview renders untrusted, Claude-generated HTML. sandbox="allow-scripts"
+             (WITHOUT allow-same-origin) gives it an opaque origin so its scripts
+             cannot reach this portal's DOM, cookies, or Identity token. -->
+        <iframe id="preview-frame" title="Form preview" sandbox="allow-scripts allow-forms"></iframe>
       </div>
 
       <!-- Generation history -->
@@ -387,9 +390,11 @@ function renderHistory(items) {
       ? '<span class="badge badge--success">Success</span>'
       : '<span class="badge badge--error">Failed</span>';
 
+    // Values go into escaped data-* attributes (never into an inline JS handler);
+    // a single delegated listener below reads them back as plain strings.
     var actions = item.status === 'success'
-      ? '<button class="btn btn--secondary btn--small" onclick="previewHistoryItem(\'' + item.key + '\')">Preview</button>'
-        + '<button class="btn btn--small" onclick="downloadHistoryItem(\'' + item.key + '\', \'' + escHtml(item.name) + '\')">Download</button>'
+      ? '<button class="btn btn--secondary btn--small" data-action="preview" data-key="' + escHtml(item.key) + '">Preview</button>'
+        + '<button class="btn btn--small" data-action="download" data-key="' + escHtml(item.key) + '" data-name="' + escHtml(item.name) + '">Download</button>'
       : '';
 
     return '<tr>'
@@ -408,6 +413,18 @@ function renderHistory(items) {
     + '<tbody>' + rows + '</tbody>'
     + '</table>';
 }
+
+// Delegated handler for the history table's Preview/Download buttons.
+// Attached once; survives re-renders since it lives on the static container.
+document.getElementById('history-container').addEventListener('click', function(e) {
+  var btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  var action = btn.getAttribute('data-action');
+  var key    = btn.getAttribute('data-key');
+  var name   = btn.getAttribute('data-name');
+  if (action === 'preview') previewHistoryItem(key);
+  else if (action === 'download') downloadHistoryItem(key, name);
+});
 
 async function previewHistoryItem(key) {
   var token;
@@ -481,7 +498,7 @@ function clearError() {
 }
 
 function escHtml(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 </script>
 </body>

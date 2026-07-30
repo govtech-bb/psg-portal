@@ -1,23 +1,8 @@
 import { getStore } from '@netlify/blobs';
-
-function getUserFromToken(token) {
-  if (!token) return null;
-  try {
-    const payload = token.split('.')[1];
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-    return {
-      email: decoded.email || decoded.sub,
-      roles: decoded.app_metadata?.roles || []
-    };
-  } catch {
-    return null;
-  }
-}
+import { getVerifiedUser } from '../lib/auth.mjs';
 
 export default async function handler(req) {
-  const authHeader = req.headers.get('authorization') || '';
-  const token = authHeader.replace('Bearer ', '');
-  const user  = getUserFromToken(token);
+  const user = await getVerifiedUser(req);
 
   if (!user) {
     return new Response(JSON.stringify({ error: 'Unauthorised' }), { status: 401 });

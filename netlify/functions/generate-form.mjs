@@ -1,5 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getStore } from '@netlify/blobs';
+import { getVerifiedUser } from '../lib/auth.mjs';
+
+// Bound abuse of the (paid) Anthropic call.
+const MAX_PDF_B64_CHARS = 15 * 1024 * 1024; // ~11MB decoded — client caps files at 10MB
+const RATE_LIMIT_MAX    = 20;               // generations per user per window
+const RATE_LIMIT_WINDOW = 60 * 60 * 1000;   // 1 hour
 
 // ---------------------------------------------------------------------------
 // Inline skill assets -- these are inlined into every generated form so the
@@ -706,23 +712,6 @@ Do not invent fees, legal wording, or contact details not present in the PDF. Us
 }
 
 // ---------------------------------------------------------------------------
-// Auth helper
-// ---------------------------------------------------------------------------
-function getUserFromToken(token) {
-  if (!token) return null;
-  try {
-    const payload = token.split('.')[1];
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-    return {
-      email: decoded.email || decoded.sub,
-      roles: decoded.app_metadata?.roles || []
-    };
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 export default async function handler(req, context) {
@@ -730,13 +719,34 @@ export default async function handler(req, context) {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 });
   }
 
-  // Auth
-  const authHeader = req.headers.get('authorization') || '';
-  const token = authHeader.replace('Bearer ', '');
-  const user  = getUserFromToken(token);
+  // Auth — signature-verified via Netlify Identity (see ../lib/auth.mjs)
+  const user = await getVerifiedUser(req);
 
   if (!user) {
     return new Response(JSON.stringify({ error: 'Unauthorised' }), { status: 401 });
+  }
+
+  const userSlug = user.email.replace(/[^a-z0-9]/gi, '-');
+
+  // Per-user rate limit (bounds Anthropic spend). Best-effort sliding window in
+  // Blobs — a burst of truly-concurrent requests can slip past, but it caps
+  // sustained abuse from any single account.
+  const rateStore = getStore('psg-ratelimit');
+  const nowMs = Date.now();
+  try {
+    let hits = (await rateStore.get(userSlug, { type: 'json' })) || [];
+    hits = hits.filter((t) => nowMs - t < RATE_LIMIT_WINDOW);
+    if (hits.length >= RATE_LIMIT_MAX) {
+      return new Response(
+        JSON.stringify({ error: 'Rate limit reached. Try again later.' }),
+        { status: 429, headers: { 'Retry-After': '3600' } }
+      );
+    }
+    hits.push(nowMs);
+    await rateStore.setJSON(userSlug, hits);
+  } catch {
+    // If the rate-limit store is unavailable, allow the request rather than
+    // hard-failing generation — the auth check above is the real gate.
   }
 
   let body;
@@ -749,6 +759,9 @@ export default async function handler(req, context) {
   const { filename, pdfBase64 } = body;
   if (!pdfBase64 || !filename) {
     return new Response(JSON.stringify({ error: 'Missing filename or pdfBase64' }), { status: 400 });
+  }
+  if (typeof pdfBase64 !== 'string' || pdfBase64.length > MAX_PDF_B64_CHARS) {
+    return new Response(JSON.stringify({ error: 'PDF too large' }), { status: 413 });
   }
 
   const auditStore = getStore('psg-audit');
