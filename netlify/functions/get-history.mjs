@@ -58,4 +58,4 @@ export default async function handler(req) {
   }
 }
 
-export const config = { path: '/api/get-history' };
+// Served at the default /.netlify/functions/get-history — matches the frontend fetch.

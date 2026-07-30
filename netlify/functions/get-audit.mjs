@@ -39,4 +39,4 @@ export default async function handler(req) {
   }
 }
 
-export const config = { path: '/api/get-audit' };
+// Served at the default /.netlify/functions/get-audit — matches the frontend fetch.

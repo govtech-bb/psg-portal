@@ -896,4 +896,4 @@ export default async function handler(req, context) {
   });
 }
 
-export const config = { path: '/api/generate-form' };
+// Served at the default /.netlify/functions/generate-form — matches the frontend fetch.
