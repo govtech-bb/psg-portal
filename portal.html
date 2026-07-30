@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Public Service Generator -- Portal</title>
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <a href="/portal" class="wordmark">Public Service Generator</a>
+      <div class="header-user">
+        <span>Signed in as <strong id="user-email"></strong></span>
+        <a href="#" id="audit-link" style="display:none;font-size:0.875rem;">Audit log</a>
+        <button class="btn btn--secondary btn--small" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="notice">
+  <div class="container">
+    <div class="notice-inner">
+      <span class="tag">Draft</span>
+      <span>Draft service -- not yet published on alpha.gov.bb</span>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="container container--narrow">
+    <div class="page-wrap">
+
+      <h1>Generate a form prototype</h1>
+      <p style="color:#595959;margin-bottom:2rem;">Upload a PDF of a paper form and get back a clickable HTML prototype ready for review.</p>
+
+      <!-- Alert -->
+      <div class="alert alert--error" id="main-error"></div>
+
+      <!-- Upload zone -->
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="pdf-input" accept=".pdf" onchange="handleFileSelect(this)" />
+        <div class="upload-icon">PDF</div>
+        <p class="upload-label" id="upload-label">Choose a PDF or drag it here</p>
+        <p class="upload-hint">PDF files only -- max 10MB</p>
+      </div>
+
+      <!-- Progress -->
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-label">
+          <span id="progress-text">Reading PDF...</span>
+          <span id="progress-pct"></span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progress-bar"></div>
+        </div>
+      </div>
+
+      <!-- Streaming log -->
+      <div class="generation-log" id="generation-log"></div>
+
+      <!-- Generate button -->
+      <div style="margin-top:1.25rem;">
+        <button class="btn" id="generate-btn" onclick="generate()" disabled>
+          Generate prototype
+        </button>
+      </div>
+
+      <!-- Result panel -->
+      <div class="result-panel" id="result-panel">
+        <div class="result-name" id="result-name"></div>
+        <div class="result-actions">
+          <button class="btn btn--secondary btn--small" onclick="togglePreview()">
+            <span id="preview-btn-label">Show preview</span>
+          </button>
+          <button class="btn btn--small" onclick="downloadResult()">
+            Download HTML
+          </button>
+        </div>
+      </div>
+
+      <!-- Preview iframe -->
+      <div class="preview-wrap" id="preview-wrap">
+        <div class="preview-toolbar">
+          <span id="preview-title"></span>
+          <button class="btn btn--secondary btn--small" onclick="togglePreview()">Close preview</button>
+        </div>
+        <iframe id="preview-frame" title="Form preview" sandbox="allow-scripts allow-same-origin"></iframe>
+      </div>
+
+      <!-- Generation history -->
+      <div class="history-section">
+        <h2>Your generations</h2>
+        <div id="history-container">
+          <div class="empty-state"><p>No forms generated yet.</p></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <span>Public Service Generator -- GovTech Barbados</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+var currentUser   = null;
+var selectedFile  = null;
+var generatedHTML = null;
+var generatedName = null;
+var previewOpen   = false;
+
+// Auth guard
+netlifyIdentity.on('init', function(user) {
+  if (!user) {
+    window.location.href = '/';
+    return;
+  }
+  currentUser = user;
+  document.getElementById('user-email').textContent = user.email;
+
+  var roles = (user.app_metadata && user.app_metadata.roles) || [];
+  if (roles.indexOf('admin') !== -1) {
+    document.getElementById('audit-link').style.display = 'inline';
+    document.getElementById('audit-link').href = '/audit';
+  }
+
+  loadHistory();
+});
+
+netlifyIdentity.on('logout', function() {
+  window.location.href = '/';
+});
+
+function signOut() {
+  netlifyIdentity.logout();
+}
+
+// File select
+function handleFileSelect(input) {
+  var file = input.files[0];
+  if (!file) return;
+
+  if (file.type !== 'application/pdf') {
+    showError('Only PDF files are supported.');
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    showError('File is too large. Maximum size is 10MB.');
+    return;
+  }
+
+  selectedFile = file;
+  clearError();
+
+  var zone = document.getElementById('upload-zone');
+  zone.classList.add('has-file');
+  document.getElementById('upload-label').textContent = file.name;
+  document.getElementById('generate-btn').disabled = false;
+}
+
+// Drag and drop
+var zone = document.getElementById('upload-zone');
+zone.addEventListener('dragover', function(e) { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', function() { zone.classList.remove('dragover'); });
+zone.addEventListener('drop', function(e) {
+  e.preventDefault();
+  zone.classList.remove('dragover');
+  var file = e.dataTransfer.files[0];
+  if (file) {
+    var input = document.getElementById('pdf-input');
+    // Create a DataTransfer to assign file to input
+    try {
+      var dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+    } catch(err) {}
+    handleFileSelect({ files: [file] });
+  }
+});
+
+// Generate
+async function generate() {
+  if (!selectedFile || !currentUser) return;
+
+  clearError();
+  generatedHTML = null;
+  generatedName = null;
+
+  document.getElementById('generate-btn').disabled = true;
+  document.getElementById('result-panel').classList.remove('visible');
+  document.getElementById('preview-wrap').classList.remove('visible');
+
+  setProgress(true, 'Reading PDF...', 10);
+  var log = document.getElementById('generation-log');
+  log.textContent = '';
+  log.classList.add('visible');
+
+  // Read file as base64
+  var base64;
+  try {
+    base64 = await fileToBase64(selectedFile);
+  } catch(err) {
+    showError('Could not read the PDF file.');
+    setProgress(false);
+    document.getElementById('generate-btn').disabled = false;
+    return;
+  }
+
+  setProgress(true, 'Sending to generator...', 25);
+
+  // Get JWT for auth
+  var token;
+  try {
+    token = await currentUser.jwt();
+  } catch(err) {
+    showError('Session expired. Please sign in again.');
+    signOut();
+    return;
+  }
+
+  try {
+    var response = await fetch('/.netlify/functions/generate-form', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({
+        filename: selectedFile.name,
+        pdfBase64: base64
+      })
+    });
+
+    if (!response.ok) {
+      var errData = await response.json().catch(function() { return {}; });
+      throw new Error(errData.error || 'Generation failed (status ' + response.status + ')');
+    }
+
+    // Stream the response
+    setProgress(true, 'Generating...', 40);
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var fullText = '';
+    var htmlStarted = false;
+    var htmlBuffer = '';
+
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+
+      var chunk = decoder.decode(result.value, { stream: true });
+      fullText += chunk;
+
+      // Parse SSE events
+      var lines = fullText.split('\n');
+      fullText = lines.pop(); // keep incomplete line
+
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.startsWith('data: ')) {
+          var data = line.slice(6);
+          if (data === '[DONE]') break;
+          try {
+            var parsed = JSON.parse(data);
+            if (parsed.type === 'text') {
+              htmlBuffer += parsed.text;
+              // Show truncated log
+              var preview = htmlBuffer.slice(0, 300).replace(/</g, '&lt;');
+              log.innerHTML = preview + (htmlBuffer.length > 300 ? '\n...' : '');
+              log.scrollTop = log.scrollHeight;
+            } else if (parsed.type === 'name') {
+              generatedName = parsed.value;
+            } else if (parsed.type === 'progress') {
+              setProgress(true, parsed.message, parsed.pct || 60);
+            } else if (parsed.type === 'error') {
+              throw new Error(parsed.message);
+            }
+          } catch(parseErr) {
+            // Not JSON, skip
+          }
+        }
+      }
+    }
+
+    if (!htmlBuffer || htmlBuffer.length < 100) {
+      throw new Error('Generator returned an empty result. Please try again.');
+    }
+
+    generatedHTML = htmlBuffer;
+    if (!generatedName) {
+      generatedName = selectedFile.name.replace(/\.pdf$/i, '');
+    }
+
+    setProgress(true, 'Done', 100);
+    setTimeout(function() { setProgress(false); }, 800);
+
+    log.classList.remove('visible');
+
+    // Show result
+    document.getElementById('result-name').textContent = generatedName;
+    document.getElementById('result-panel').classList.add('visible');
+    document.getElementById('generate-btn').disabled = false;
+
+    // Reload history
+    loadHistory();
+
+  } catch(err) {
+    showError(err.message || 'Something went wrong. Please try again.');
+    setProgress(false);
+    log.classList.remove('visible');
+    document.getElementById('generate-btn').disabled = false;
+  }
+}
+
+// Preview toggle
+function togglePreview() {
+  var wrap  = document.getElementById('preview-wrap');
+  var label = document.getElementById('preview-btn-label');
+
+  if (previewOpen) {
+    wrap.classList.remove('visible');
+    label.textContent = 'Show preview';
+    previewOpen = false;
+  } else {
+    if (!generatedHTML) return;
+    var frame = document.getElementById('preview-frame');
+    frame.srcdoc = generatedHTML;
+    document.getElementById('preview-title').textContent = generatedName || 'Preview';
+    wrap.classList.add('visible');
+    label.textContent = 'Hide preview';
+    previewOpen = true;
+  }
+}
+
+// Download
+function downloadResult() {
+  if (!generatedHTML) return;
+  var blob = new Blob([generatedHTML], { type: 'text/html' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href   = url;
+  a.download = (generatedName || 'form-prototype').toLowerCase().replace(/\s+/g, '-') + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Load history
+async function loadHistory() {
+  if (!currentUser) return;
+  var token;
+  try { token = await currentUser.jwt(); } catch(e) { return; }
+
+  try {
+    var res = await fetch('/.netlify/functions/get-history', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) return;
+    var data = await res.json();
+    renderHistory(data.items || []);
+  } catch(e) {
+    // History load failing silently is acceptable
+  }
+}
+
+function renderHistory(items) {
+  var container = document.getElementById('history-container');
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state"><p>No forms generated yet.</p></div>';
+    return;
+  }
+
+  var rows = items.map(function(item) {
+    var date = new Date(item.timestamp);
+    var dateStr = date.toLocaleDateString('en-BB', { day: 'numeric', month: 'short', year: 'numeric' });
+    var timeStr = date.toLocaleTimeString('en-BB', { hour: '2-digit', minute: '2-digit' });
+    var badge = item.status === 'success'
+      ? '<span class="badge badge--success">Success</span>'
+      : '<span class="badge badge--error">Failed</span>';
+
+    var actions = item.status === 'success'
+      ? '<button class="btn btn--secondary btn--small" onclick="previewHistoryItem(\'' + item.key + '\')">Preview</button>'
+        + '<button class="btn btn--small" onclick="downloadHistoryItem(\'' + item.key + '\', \'' + escHtml(item.name) + '\')">Download</button>'
+      : '';
+
+    return '<tr>'
+      + '<td>' + escHtml(item.name) + '</td>'
+      + '<td>' + escHtml(item.filename) + '</td>'
+      + '<td style="white-space:nowrap;">' + dateStr + ' ' + timeStr + '</td>'
+      + '<td>' + badge + '</td>'
+      + '<td><div class="actions">' + actions + '</div></td>'
+      + '</tr>';
+  }).join('');
+
+  container.innerHTML = '<table class="history-table">'
+    + '<thead><tr>'
+    + '<th>Form name</th><th>Source PDF</th><th>Generated</th><th>Status</th><th>Actions</th>'
+    + '</tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '</table>';
+}
+
+async function previewHistoryItem(key) {
+  var token;
+  try { token = await currentUser.jwt(); } catch(e) { return; }
+  try {
+    var res = await fetch('/.netlify/functions/get-history?key=' + encodeURIComponent(key), {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) return;
+    var data = await res.json();
+    if (!data.html) return;
+    generatedHTML = data.html;
+    generatedName = data.name;
+    document.getElementById('result-name').textContent = data.name;
+    document.getElementById('result-panel').classList.add('visible');
+    previewOpen = false;
+    togglePreview();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch(e) {}
+}
+
+async function downloadHistoryItem(key, name) {
+  var token;
+  try { token = await currentUser.jwt(); } catch(e) { return; }
+  try {
+    var res = await fetch('/.netlify/functions/get-history?key=' + encodeURIComponent(key), {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) return;
+    var data = await res.json();
+    if (!data.html) return;
+    var blob = new Blob([data.html], { type: 'text/html' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href   = url;
+    a.download = (name || 'form-prototype').toLowerCase().replace(/\s+/g, '-') + '.html';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {}
+}
+
+// Utilities
+function fileToBase64(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload  = function() { resolve(reader.result.split(',')[1]); };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function setProgress(visible, label, pct) {
+  var wrap = document.getElementById('progress-wrap');
+  if (!visible) { wrap.classList.remove('visible'); return; }
+  wrap.classList.add('visible');
+  document.getElementById('progress-text').textContent = label || '';
+  document.getElementById('progress-pct').textContent  = pct ? pct + '%' : '';
+  document.getElementById('progress-bar').style.width  = (pct || 0) + '%';
+}
+
+function showError(msg) {
+  var el = document.getElementById('main-error');
+  el.textContent = msg;
+  el.classList.add('visible');
+}
+
+function clearError() {
+  var el = document.getElementById('main-error');
+  el.textContent = '';
+  el.classList.remove('visible');
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

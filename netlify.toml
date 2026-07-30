@@ -1,0 +1,32 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[dev]
+  port = 8888
+
+# Identity: require login for portal and audit pages
+[[redirects]]
+  from = "/portal"
+  to = "/portal.html"
+  status = 200
+  conditions = {Role = ["admin", "digital-champion"]}
+
+[[redirects]]
+  from = "/portal"
+  to = "/index.html"
+  status = 302
+
+[[redirects]]
+  from = "/audit"
+  to = "/audit.html"
+  status = 200
+  conditions = {Role = ["admin"]}
+
+[[redirects]]
+  from = "/audit"
+  to = "/index.html"
+  status = 302
+
+[functions]
+  node_bundler = "esbuild"

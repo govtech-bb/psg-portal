@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Public Service Generator</title>
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <span class="wordmark">Public Service Generator</span>
+    </div>
+  </div>
+</header>
+
+<div class="notice">
+  <div class="container">
+    <div class="notice-inner">
+      <span class="tag">Draft</span>
+      <span>Draft service -- not yet published on alpha.gov.bb</span>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="container">
+    <div class="login-wrap">
+      <div class="login-card">
+        <h1>Sign in</h1>
+        <p class="subtitle">Use your GovTech Barbados account to access the form generator.</p>
+
+        <div class="alert alert--error" id="login-error"></div>
+
+        <div class="field">
+          <label for="email">Email address</label>
+          <div class="input-wrap">
+            <input type="email" id="email" autocomplete="email" placeholder="you@ministry.gov.bb" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="input-wrap">
+            <input type="password" id="password" autocomplete="current-password" />
+          </div>
+        </div>
+
+        <button class="btn" id="sign-in-btn" onclick="signIn()" style="width:100%;justify-content:center;margin-top:0.5rem;">
+          Sign in
+        </button>
+
+        <p style="margin-top:1.25rem;font-size:0.875rem;color:#595959;">
+          No account? Contact your GovTech administrator to be invited.
+        </p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <span>Public Service Generator -- GovTech Barbados</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // If already logged in, redirect immediately
+  netlifyIdentity.on('init', function(user) {
+    if (user) redirectUser(user);
+  });
+
+  netlifyIdentity.on('login', function(user) {
+    redirectUser(user);
+  });
+
+  function redirectUser(user) {
+    var roles = (user.app_metadata && user.app_metadata.roles) || [];
+    if (roles.indexOf('admin') !== -1) {
+      window.location.href = '/audit';
+    } else {
+      window.location.href = '/portal';
+    }
+  }
+
+  function showError(msg) {
+    var el = document.getElementById('login-error');
+    el.textContent = msg;
+    el.classList.add('visible');
+  }
+
+  function signIn() {
+    var email    = document.getElementById('email').value.trim();
+    var password = document.getElementById('password').value;
+    var btn      = document.getElementById('sign-in-btn');
+
+    if (!email || !password) {
+      showError('Enter your email address and password.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Signing in...';
+
+    netlifyIdentity.login(email, password).catch(function(err) {
+      showError(err.message || 'Could not sign in. Check your email and password.');
+      btn.disabled = false;
+      btn.innerHTML = 'Sign in';
+    });
+  }
+
+  // Allow Enter key to submit
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') signIn();
+  });
+</script>
+</body>
+</html>

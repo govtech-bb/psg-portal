@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audit Log -- Public Service Generator</title>
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <a href="/portal" class="wordmark">Public Service Generator</a>
+      <div class="header-user">
+        <span>Signed in as <strong id="user-email"></strong></span>
+        <a href="/portal" style="font-size:0.875rem;">Portal</a>
+        <button class="btn btn--secondary btn--small" onclick="signOut()">Sign out</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="notice">
+  <div class="container">
+    <div class="notice-inner">
+      <span class="tag">Admin</span>
+      <span>Audit log -- GovTech Barbados internal use only</span>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div class="container">
+    <div class="page-wrap">
+
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:2rem;">
+        <div>
+          <h1>Audit log</h1>
+          <p style="color:#595959;margin:0;">All form generations across all users.</p>
+        </div>
+        <button class="btn btn--secondary" onclick="exportCSV()">Export CSV</button>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row" id="stats-row">
+        <div class="stat-card">
+          <div class="stat-value" id="stat-total">--</div>
+          <div class="stat-label">Total generations</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-success">--</div>
+          <div class="stat-label">Successful</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-failed">--</div>
+          <div class="stat-label">Failed</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="stat-users">--</div>
+          <div class="stat-label">Unique users</div>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="filter-bar">
+        <div class="field">
+          <label for="filter-user">Filter by user</label>
+          <div class="input-wrap">
+            <input type="text" id="filter-user" placeholder="email@example.com" oninput="applyFilters()" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="filter-status">Status</label>
+          <div class="input-wrap">
+            <select id="filter-status" onchange="applyFilters()">
+              <option value="">All</option>
+              <option value="success">Success</option>
+              <option value="error">Failed</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="filter-from">From date</label>
+          <div class="input-wrap">
+            <input type="date" id="filter-from" onchange="applyFilters()" />
+          </div>
+        </div>
+        <div class="field">
+          <label for="filter-to">To date</label>
+          <div class="input-wrap">
+            <input type="date" id="filter-to" onchange="applyFilters()" />
+          </div>
+        </div>
+        <button class="btn btn--secondary btn--small" onclick="clearFilters()">Clear filters</button>
+      </div>
+
+      <!-- Alert -->
+      <div class="alert alert--error" id="audit-error"></div>
+
+      <!-- Loading -->
+      <div id="loading-state" style="padding:2rem 0;text-align:center;color:#595959;font-size:0.9375rem;">
+        <span class="spinner"></span> Loading audit log...
+      </div>
+
+      <!-- Table -->
+      <div id="audit-container" style="display:none;"></div>
+
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <span>Public Service Generator -- GovTech Barbados</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+var currentUser = null;
+var allItems    = [];
+var filtered    = [];
+
+netlifyIdentity.on('init', function(user) {
+  if (!user) { window.location.href = '/'; return; }
+
+  var roles = (user.app_metadata && user.app_metadata.roles) || [];
+  if (roles.indexOf('admin') === -1) {
+    window.location.href = '/portal';
+    return;
+  }
+
+  currentUser = user;
+  document.getElementById('user-email').textContent = user.email;
+  loadAudit();
+});
+
+netlifyIdentity.on('logout', function() { window.location.href = '/'; });
+function signOut() { netlifyIdentity.logout(); }
+
+async function loadAudit() {
+  var token;
+  try { token = await currentUser.jwt(); } catch(e) { return; }
+
+  try {
+    var res = await fetch('/.netlify/functions/get-audit', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      throw new Error(err.error || 'Failed to load audit log');
+    }
+    var data = await res.json();
+    allItems = data.items || [];
+    filtered = allItems.slice();
+
+    updateStats(allItems);
+    renderTable(filtered);
+
+    document.getElementById('loading-state').style.display = 'none';
+    document.getElementById('audit-container').style.display = 'block';
+
+  } catch(err) {
+    document.getElementById('loading-state').style.display = 'none';
+    var el = document.getElementById('audit-error');
+    el.textContent = err.message || 'Could not load audit log.';
+    el.classList.add('visible');
+  }
+}
+
+function updateStats(items) {
+  var success = items.filter(function(i) { return i.status === 'success'; }).length;
+  var failed  = items.filter(function(i) { return i.status === 'error'; }).length;
+  var users   = new Set(items.map(function(i) { return i.userEmail; })).size;
+
+  document.getElementById('stat-total').textContent   = items.length;
+  document.getElementById('stat-success').textContent = success;
+  document.getElementById('stat-failed').textContent  = failed;
+  document.getElementById('stat-users').textContent   = users;
+}
+
+function applyFilters() {
+  var userFilter   = document.getElementById('filter-user').value.trim().toLowerCase();
+  var statusFilter = document.getElementById('filter-status').value;
+  var fromFilter   = document.getElementById('filter-from').value;
+  var toFilter     = document.getElementById('filter-to').value;
+
+  filtered = allItems.filter(function(item) {
+    if (userFilter   && item.userEmail.toLowerCase().indexOf(userFilter) === -1) return false;
+    if (statusFilter && item.status !== statusFilter) return false;
+    if (fromFilter) {
+      var from = new Date(fromFilter);
+      if (new Date(item.timestamp) < from) return false;
+    }
+    if (toFilter) {
+      var to = new Date(toFilter);
+      to.setHours(23, 59, 59, 999);
+      if (new Date(item.timestamp) > to) return false;
+    }
+    return true;
+  });
+
+  renderTable(filtered);
+}
+
+function clearFilters() {
+  document.getElementById('filter-user').value   = '';
+  document.getElementById('filter-status').value = '';
+  document.getElementById('filter-from').value   = '';
+  document.getElementById('filter-to').value     = '';
+  filtered = allItems.slice();
+  renderTable(filtered);
+}
+
+function renderTable(items) {
+  var container = document.getElementById('audit-container');
+
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state"><p>No results match the current filters.</p></div>';
+    return;
+  }
+
+  var rows = items.map(function(item) {
+    var date    = new Date(item.timestamp);
+    var dateStr = date.toLocaleDateString('en-BB', { day: 'numeric', month: 'short', year: 'numeric' });
+    var timeStr = date.toLocaleTimeString('en-BB', { hour: '2-digit', minute: '2-digit' });
+
+    var badge = item.status === 'success'
+      ? '<span class="badge badge--success">Success</span>'
+      : '<span class="badge badge--error">Failed</span>';
+
+    var errorCell = item.status === 'error' && item.error
+      ? '<span title="' + escHtml(item.error) + '" style="cursor:help;color:#a42c2c;font-size:0.8125rem;">' + escHtml(item.error).slice(0, 60) + (item.error.length > 60 ? '...' : '') + '</span>'
+      : '--';
+
+    return '<tr>'
+      + '<td style="white-space:nowrap;">' + dateStr + '<br><span style="color:#595959;font-size:0.8125rem;">' + timeStr + '</span></td>'
+      + '<td>' + escHtml(item.userEmail) + '</td>'
+      + '<td>' + escHtml(item.formName || '--') + '</td>'
+      + '<td>' + escHtml(item.filename || '--') + '</td>'
+      + '<td>' + badge + '</td>'
+      + '<td style="font-size:0.8125rem;">' + errorCell + '</td>'
+      + '</tr>';
+  }).join('');
+
+  container.innerHTML = '<p style="font-size:0.875rem;color:#595959;margin-bottom:0.5rem;">Showing ' + items.length + ' of ' + allItems.length + ' entries</p>'
+    + '<table class="history-table">'
+    + '<thead><tr>'
+    + '<th>Date / time</th><th>User</th><th>Form name</th><th>Source PDF</th><th>Status</th><th>Error</th>'
+    + '</tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '</table>';
+}
+
+function exportCSV() {
+  var items = filtered.length ? filtered : allItems;
+  if (!items.length) return;
+
+  var headers = ['Timestamp', 'User', 'Form name', 'Source PDF', 'Status', 'Error'];
+  var rows = items.map(function(item) {
+    return [
+      item.timestamp,
+      item.userEmail,
+      item.formName || '',
+      item.filename || '',
+      item.status,
+      item.error || ''
+    ].map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
+  });
+
+  var csv  = [headers.join(',')].concat(rows).join('\n');
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href   = url;
+  a.download = 'psg-audit-' + new Date().toISOString().slice(0, 10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

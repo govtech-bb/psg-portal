@@ -1,0 +1,9 @@
+{
+  "name": "psg-portal",
+  "version": "1.0.0",
+  "description": "Public Service Generator portal",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@netlify/blobs": "^7.0.0"
+  }
+}
